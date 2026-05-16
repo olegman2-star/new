@@ -137,14 +137,28 @@ def build_title_and_description(topic: str) -> tuple[str, str]:
     return title, description
 
 
+def get_kronos_entry():
+    if not os.environ.get("KRONOS_ENABLED"):
+        return None
+    try:
+        from kronos_forecast import build_video_entry, run_kronos_forecast  # noqa: PLC0415
+        forecast = run_kronos_forecast(pred_len=24)
+        return build_video_entry(forecast)
+    except Exception as exc:
+        print(f"Kronos forecast failed, falling back to topic rotation: {exc}", file=sys.stderr)
+        return None
+
+
 def main():
     api_key = os.environ.get("HIGGSFIELD_API_KEY")
     if not api_key:
         print("ERROR: HIGGSFIELD_API_KEY is not set", file=sys.stderr)
         sys.exit(1)
 
-    prompts = load_prompts()
-    entry = pick_prompt(prompts)
+    entry = get_kronos_entry()
+    if entry is None:
+        prompts = load_prompts()
+        entry = pick_prompt(prompts)
     prompt = entry["prompt"]
     topic = entry["topic"]
     print(f"Today's topic: {topic}")

@@ -8,7 +8,7 @@ on:
 jobs:
   post-video:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repo
@@ -19,8 +19,29 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('scripts/requirements.txt') }}-torch-cpu
+
+      - name: Cache Hugging Face models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: ${{ runner.os }}-hf-kronos-mini-v1
+
+      - name: Install PyTorch (CPU-only)
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
       - name: Install dependencies
         run: pip install -r scripts/requirements.txt
+
+      - name: Clone Kronos
+        run: git clone --depth 1 https://github.com/shiyu-coder/Kronos.git kronos_repo
+
+      - name: Install Kronos dependencies
+        run: pip install -r kronos_repo/requirements.txt
 
       - name: Generate and upload video
         run: python scripts/generate_and_upload.py
@@ -29,3 +50,7 @@ jobs:
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+          KRONOS_ENABLED: "true"
+          KRONOS_REPO_PATH: ${{ github.workspace }}/kronos_repo
+          KRONOS_MODEL_ID: "NeoQuasar/Kronos-mini"
+          KRONOS_TOKENIZER_ID: "NeoQuasar/Kronos-Tokenizer-base"
