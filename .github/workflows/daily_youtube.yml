@@ -1,9 +1,9 @@
 name: Daily YouTube Video
 
 on:
-  schedule:
-    - cron: '0 10 * * *'   # 10:00 UTC every day
-  workflow_dispatch:         # allows manual trigger from GitHub UI
+  # schedule disabled — replaced by daily_pipeline.yml (agent pipeline);
+  # kept as manual fallback if the agent pipeline is down
+  workflow_dispatch:
 
 jobs:
   post-video:

@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import sys
@@ -97,12 +98,12 @@ def get_youtube_service():
     return build("youtube", "v3", credentials=creds)
 
 
-def upload_to_youtube(service, video_path: str, title: str, description: str):
+def upload_to_youtube(service, video_path: str, title: str, description: str, tags=None):
     body = {
         "snippet": {
             "title": title,
             "description": description,
-            "tags": ["tech", "AI", "technology", "smart tech", "daily tech"],
+            "tags": tags or ["tech", "AI", "technology", "smart tech", "daily tech"],
             "categoryId": "28",  # Science & Technology
         },
         "status": {
@@ -135,6 +136,41 @@ def build_title_and_description(topic: str) -> tuple[str, str]:
         f"#SmartTechDaily #{topic.replace(' ', '')} #AI #Technology #FutureTech"
     )
     return title, description
+
+
+def cmd_generate(args):
+    """Pipeline stage: generate a video from a prompt file and save it locally."""
+    api_key = os.environ.get("HIGGSFIELD_API_KEY")
+    if not api_key:
+        print("ERROR: HIGGSFIELD_API_KEY is not set", file=sys.stderr)
+        sys.exit(1)
+
+    with open(args.prompt_file) as f:
+        prompt = f.read().strip()
+    print(f"Prompt: {prompt}")
+
+    video_url = generate_video(prompt, api_key)
+    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+    download_video(video_url, args.out)
+    size = os.path.getsize(args.out)
+    print(f"OK: {args.out} ({size} bytes)")
+
+
+def cmd_upload(args):
+    """Pipeline stage: upload a local video with metadata from a JSON file."""
+    with open(args.metadata) as f:
+        meta = json.load(f)
+
+    service = get_youtube_service()
+    print(f"Uploading: {meta['title']}")
+    video_id = upload_to_youtube(
+        service,
+        args.video,
+        meta["title"],
+        meta["description"],
+        tags=meta.get("tags"),
+    )
+    print(json.dumps({"video_id": video_id, "url": f"https://www.youtube.com/watch?v={video_id}"}))
 
 
 def main():
@@ -171,4 +207,22 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Smart Tech Daily video pipeline")
+    sub = parser.add_subparsers(dest="command")
+
+    p_gen = sub.add_parser("generate", help="generate a video from a prompt file")
+    p_gen.add_argument("--prompt-file", required=True)
+    p_gen.add_argument("--out", required=True)
+
+    p_up = sub.add_parser("upload", help="upload a video with metadata JSON")
+    p_up.add_argument("--video", required=True)
+    p_up.add_argument("--metadata", required=True)
+
+    args = parser.parse_args()
+    if args.command == "generate":
+        cmd_generate(args)
+    elif args.command == "upload":
+        cmd_upload(args)
+    else:
+        # legacy mode: rotate through config/prompts.json and do the full run
+        main()

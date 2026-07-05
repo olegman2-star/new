@@ -1,0 +1,43 @@
+name: Daily Agent Pipeline
+
+on:
+  schedule:
+    - cron: '0 10 * * *'   # 10:00 UTC every day
+  workflow_dispatch:
+
+jobs:
+  daily-video:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Run agent pipeline
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Run today's Smart Tech Daily pipeline exactly as specified in CLAUDE.md:
+            researcher -> scriptwriter -> producer -> publisher -> promoter,
+            using the matching agent for each stage. Stop and report if any
+            stage fails. When the run succeeds, commit pipeline/history.json
+            and the pipeline/today/ text artifacts (never the mp4) with message
+            "daily run: <topic>".
+          claude_args: '--allowedTools "Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Agent"'
+        env:
+          HIGGSFIELD_API_KEY: ${{ secrets.HIGGSFIELD_API_KEY }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
