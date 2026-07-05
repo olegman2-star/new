@@ -38,6 +38,7 @@ jobs:
           claude_args: '--allowedTools "Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Agent"'
         env:
           HIGGSFIELD_API_KEY: ${{ secrets.HIGGSFIELD_API_KEY }}
+          HIGGSFIELD_API_SECRET: ${{ secrets.HIGGSFIELD_API_SECRET }}
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}

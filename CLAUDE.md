@@ -20,7 +20,7 @@ Rules for the orchestrator:
 
 ## Environment
 
-- `HIGGSFIELD_API_KEY` — video generation
+- `HIGGSFIELD_API_KEY` + `HIGGSFIELD_API_SECRET` — video generation via the Higgsfield Cloud API (`platform.higgsfield.ai`, keys from cloud.higgsfield.ai; a separate product from the consumer higgsfield.ai app). Generation is two-stage: Soul text-to-image, then DoP image-to-video. Models overridable via `HF_IMAGE_MODEL` / `HF_VIDEO_MODEL`.
 - `YOUTUBE_CLIENT_ID` / `YOUTUBE_CLIENT_SECRET` / `YOUTUBE_REFRESH_TOKEN` — upload (token helper: `scripts/get_youtube_token.py`)
 - `ANTHROPIC_API_KEY` — the agent orchestration in CI
 

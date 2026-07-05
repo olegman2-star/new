@@ -10,7 +10,10 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-HIGGSFIELD_API_BASE = "https://api.higgsfield.ai/v1"
+HIGGSFIELD_API_BASE = "https://platform.higgsfield.ai"
+# documented models: Soul (text-to-image), DoP (image-to-video with camera motion)
+HF_IMAGE_MODEL = os.environ.get("HF_IMAGE_MODEL", "higgsfield-ai/soul/standard")
+HF_VIDEO_MODEL = os.environ.get("HF_VIDEO_MODEL", "higgsfield-ai/dop/standard")
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
 
@@ -25,37 +28,38 @@ def pick_prompt(prompts):
     return prompts[day_of_year % len(prompts)]
 
 
-def generate_video(prompt: str, api_key: str) -> str:
-    headers = {
-        "Authorization": f"Bearer {api_key}",
+def hf_headers() -> dict:
+    api_key = os.environ["HIGGSFIELD_API_KEY"]
+    api_secret = os.environ["HIGGSFIELD_API_SECRET"]
+    return {
+        "Authorization": f"Key {api_key}:{api_secret}",
         "Content-Type": "application/json",
+        "Accept": "application/json",
     }
-    payload = {
-        "prompt": prompt,
-        "aspect_ratio": "16:9",
-        "duration": 6,
-    }
+
+
+def hf_submit(model_path: str, payload: dict) -> str:
     resp = requests.post(
-        f"{HIGGSFIELD_API_BASE}/video/generate",
-        headers=headers,
+        f"{HIGGSFIELD_API_BASE}/{model_path}",
+        headers=hf_headers(),
         json=payload,
         timeout=30,
     )
     resp.raise_for_status()
     data = resp.json()
-    job_id = data.get("id") or data.get("job_id")
-    if not job_id:
-        raise RuntimeError(f"No job_id in response: {data}")
-    print(f"Video generation started, job_id={job_id}")
-    return poll_for_video(job_id, headers)
+    request_id = data.get("request_id") or data.get("id")
+    if not request_id:
+        raise RuntimeError(f"No request_id in response: {data}")
+    print(f"Submitted to {model_path}, request_id={request_id}")
+    return request_id
 
 
-def poll_for_video(job_id: str, headers: dict, max_wait: int = 600) -> str:
+def hf_poll(request_id: str, max_wait: int = 600) -> dict:
     deadline = time.time() + max_wait
     while time.time() < deadline:
         resp = requests.get(
-            f"{HIGGSFIELD_API_BASE}/video/{job_id}",
-            headers=headers,
+            f"{HIGGSFIELD_API_BASE}/requests/{request_id}/status",
+            headers=hf_headers(),
             timeout=15,
         )
         resp.raise_for_status()
@@ -63,14 +67,39 @@ def poll_for_video(job_id: str, headers: dict, max_wait: int = 600) -> str:
         status = data.get("status", "")
         print(f"  status={status}")
         if status == "completed":
-            url = data.get("url") or data.get("video_url")
-            if not url:
-                raise RuntimeError(f"Completed but no video URL: {data}")
-            return url
-        if status in ("failed", "error"):
-            raise RuntimeError(f"Video generation failed: {data}")
+            return data
+        if status in ("failed", "error", "nsfw", "cancelled"):
+            raise RuntimeError(f"Generation failed: {data}")
         time.sleep(15)
-    raise TimeoutError(f"Video not ready after {max_wait}s")
+    raise TimeoutError(f"Request {request_id} not ready after {max_wait}s")
+
+
+def generate_video(prompt: str) -> str:
+    # Stage A: text -> cinematic still (Soul)
+    image_req = hf_submit(HF_IMAGE_MODEL, {
+        "prompt": prompt,
+        "aspect_ratio": "16:9",
+        "resolution": "720p",
+    })
+    image_result = hf_poll(image_req)
+    images = image_result.get("images") or []
+    if not images or not images[0].get("url"):
+        raise RuntimeError(f"Completed but no image URL: {image_result}")
+    image_url = images[0]["url"]
+    print(f"Image ready: {image_url}")
+
+    # Stage B: still -> video with camera motion (DoP)
+    video_req = hf_submit(HF_VIDEO_MODEL, {
+        "image_url": image_url,
+        "prompt": prompt,
+        "duration": 5,
+    })
+    video_result = hf_poll(video_req)
+    video = video_result.get("video") or {}
+    url = video.get("url")
+    if not url:
+        raise RuntimeError(f"Completed but no video URL: {video_result}")
+    return url
 
 
 def download_video(url: str, dest_path: str):
@@ -138,18 +167,22 @@ def build_title_and_description(topic: str) -> tuple[str, str]:
     return title, description
 
 
+def require_hf_creds():
+    missing = [v for v in ("HIGGSFIELD_API_KEY", "HIGGSFIELD_API_SECRET") if not os.environ.get(v)]
+    if missing:
+        print(f"ERROR: {', '.join(missing)} not set", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_generate(args):
     """Pipeline stage: generate a video from a prompt file and save it locally."""
-    api_key = os.environ.get("HIGGSFIELD_API_KEY")
-    if not api_key:
-        print("ERROR: HIGGSFIELD_API_KEY is not set", file=sys.stderr)
-        sys.exit(1)
+    require_hf_creds()
 
     with open(args.prompt_file) as f:
         prompt = f.read().strip()
     print(f"Prompt: {prompt}")
 
-    video_url = generate_video(prompt, api_key)
+    video_url = generate_video(prompt)
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     download_video(video_url, args.out)
     size = os.path.getsize(args.out)
@@ -174,10 +207,7 @@ def cmd_upload(args):
 
 
 def main():
-    api_key = os.environ.get("HIGGSFIELD_API_KEY")
-    if not api_key:
-        print("ERROR: HIGGSFIELD_API_KEY is not set", file=sys.stderr)
-        sys.exit(1)
+    require_hf_creds()
 
     prompts = load_prompts()
     entry = pick_prompt(prompts)
@@ -187,7 +217,7 @@ def main():
     print(f"Prompt: {prompt}")
 
     print("Generating video...")
-    video_url = generate_video(prompt, api_key)
+    video_url = generate_video(prompt)
     print(f"Video URL: {video_url}")
 
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:

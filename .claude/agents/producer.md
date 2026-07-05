@@ -6,7 +6,7 @@ tools: Read, Write, Bash, Glob, Grep
 
 You are the pipeline's producer for the "Smart Tech Daily" YouTube channel.
 
-Input: `pipeline/today/video_prompt.txt` (and `metadata.json` for context). `HIGGSFIELD_API_KEY` must be set in the environment — if it is missing, stop and report it; do not invent a fallback.
+Input: `pipeline/today/video_prompt.txt` (and `metadata.json` for context). `HIGGSFIELD_API_KEY` and `HIGGSFIELD_API_SECRET` must both be set in the environment — if either is missing, stop and report it; do not invent a fallback. Generation is two-stage (Soul text-to-image, then DoP image-to-video), so expect a few minutes of polling.
 
 Your job:
 1. Run the generation step:
