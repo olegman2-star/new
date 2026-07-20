@@ -1,11 +1,11 @@
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 import datetime
 import tempfile
-import requests
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -28,25 +28,33 @@ def pick_prompt(prompts):
     return prompts[day_of_year % len(prompts)]
 
 
-def hf_headers() -> dict:
+# Higgsfield sits behind Cloudflare bot protection that bans Python HTTP
+# clients (urllib/requests TLS fingerprints) with error 1010. curl's genuine
+# signature passes, so all Higgsfield calls shell out to curl.
+def hf_curl(method: str, path: str, payload: dict = None) -> dict:
     api_key = os.environ["HIGGSFIELD_API_KEY"]
     api_secret = os.environ["HIGGSFIELD_API_SECRET"]
-    return {
-        "Authorization": f"Key {api_key}:{api_secret}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
+    cmd = [
+        "curl", "-s", "-X", method,
+        f"{HIGGSFIELD_API_BASE}/{path}",
+        "-H", f"Authorization: Key {api_key}:{api_secret}",
+        "-H", "Content-Type: application/json",
+        "-H", "Accept: application/json",
+        "--max-time", "30",
+    ]
+    if payload is not None:
+        cmd += ["-d", json.dumps(payload)]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if result.returncode != 0:
+        raise RuntimeError(f"curl failed ({result.returncode}): {result.stderr[:300]}")
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        raise RuntimeError(f"Non-JSON response from {path}: {result.stdout[:300]}")
 
 
 def hf_submit(model_path: str, payload: dict) -> str:
-    resp = requests.post(
-        f"{HIGGSFIELD_API_BASE}/{model_path}",
-        headers=hf_headers(),
-        json=payload,
-        timeout=30,
-    )
-    resp.raise_for_status()
-    data = resp.json()
+    data = hf_curl("POST", model_path, payload)
     request_id = data.get("request_id") or data.get("id")
     if not request_id:
         raise RuntimeError(f"No request_id in response: {data}")
@@ -57,13 +65,7 @@ def hf_submit(model_path: str, payload: dict) -> str:
 def hf_poll(request_id: str, max_wait: int = 600) -> dict:
     deadline = time.time() + max_wait
     while time.time() < deadline:
-        resp = requests.get(
-            f"{HIGGSFIELD_API_BASE}/requests/{request_id}/status",
-            headers=hf_headers(),
-            timeout=15,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        data = hf_curl("GET", f"requests/{request_id}/status")
         status = data.get("status", "")
         print(f"  status={status}")
         if status == "completed":
@@ -103,11 +105,12 @@ def generate_video(prompt: str) -> str:
 
 
 def download_video(url: str, dest_path: str):
-    resp = requests.get(url, stream=True, timeout=120)
-    resp.raise_for_status()
-    with open(dest_path, "wb") as f:
-        for chunk in resp.iter_content(chunk_size=8192):
-            f.write(chunk)
+    result = subprocess.run(
+        ["curl", "-s", "-L", "--max-time", "300", "-o", dest_path, url],
+        capture_output=True, text=True, timeout=320,
+    )
+    if result.returncode != 0 or not os.path.exists(dest_path) or os.path.getsize(dest_path) == 0:
+        raise RuntimeError(f"Download failed ({result.returncode}): {result.stderr[:300]}")
     print(f"Downloaded video to {dest_path}")
 
 
