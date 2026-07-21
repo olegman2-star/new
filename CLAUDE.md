@@ -1,36 +1,63 @@
-# Smart Tech Daily — agent pipeline
+# Smart Tech Daily — daily video pipeline
 
-Daily AI-generated tech video channel. Video generation is Higgsfield API; upload is YouTube Data API. The daily run is orchestrated by five expert agents (in `.claude/agents/`), each backed by YouTube-creator skills (in `.claude/skills/`).
+Daily AI-generated tech video channel. One GitHub Actions run per day produces a
+video and publishes it.
 
-## Pipeline (run stages in this order, each via its agent)
+The pipeline is split by what actually needs judgment. Research, writing, and
+promotion are creative work and run through Claude. Generating and publishing
+are deterministic API calls with one correct outcome, so they are plain Python
+steps — an LLM adds cost and failure modes there, not quality.
 
-| Stage | Agent | Reads | Writes |
-|-------|-------|-------|--------|
-| 1. Research | `researcher` | web trends, `pipeline/history.json` | `pipeline/today/research.md` |
-| 2. Write | `scriptwriter` | `research.md` | `pipeline/today/video_prompt.txt`, `metadata.json` |
-| 3. Produce | `producer` | `video_prompt.txt` | `pipeline/today/video.mp4`, `thumbnail.md` |
-| 4. Publish | `publisher` | `video.mp4`, `metadata.json` | YouTube upload, `pipeline/history.json` |
-| 5. Promote | `promoter` | `research.md`, `metadata.json`, `history.json` | `pipeline/today/promotion.md` |
+## The run
 
-Rules for the orchestrator:
-- Stages are strictly sequential; each depends on the previous stage's artifacts.
-- If a stage fails, stop the pipeline and report — never upload without a verified video, never promote without a successful upload.
-- `pipeline/today/` is recreated each run; `pipeline/history.json` is append-only and is the dedupe source (last 14 topics must not repeat).
-- After a successful run, commit `pipeline/history.json` and `pipeline/today/` artifacts (not `video.mp4`) back to the repo.
+| # | Step | Kind | Produces |
+|---|------|------|----------|
+| 1 | Preflight | script | nothing — validates credentials before anything costs money |
+| 2 | Write content | Claude (Sonnet, one pass) | `research.md`, `video_prompt.txt`, `metadata.json`, `promotion.md` |
+| 3 | Verify content | script | fails the run if step 2 came up short |
+| 4 | Generate video | script | `video.mp4` via Higgsfield |
+| 5 | Publish | script | YouTube upload, appends `pipeline/history.json` |
+| 6 | Commit | script | commits the text artifacts (never the mp4) |
+
+Step 2 reads the briefs in `.claude/agents/` (`researcher`, `scriptwriter`,
+`promoter`) and the skills in `.claude/skills/` those briefs name. Editing a
+brief changes the output — that is the intended way to tune the channel's voice.
+
+`pipeline/today/` is rebuilt every run. `pipeline/history.json` is append-only
+and is both the dedupe source (the researcher must not repeat the last 14
+topics) and the idempotency guard.
+
+## Design rules
+
+- **Preflight before spend.** Credentials are checked while failure is free.
+  A dead OAuth token once surfaced only after a 16 MB video had been paid for.
+- **Never publish twice.** `preflight` and `upload` both refuse if
+  `history.json` already holds today's date; the workflow uses a concurrency
+  group so two runs cannot overlap.
+- **The paid artifact survives failure.** `video.mp4` is uploaded as a run
+  artifact, so a failed publish never forces regenerating the same video.
+- **Green means published.** Every step fails loudly; the run only succeeds if
+  a video reached YouTube.
 
 ## Environment
 
-- `HIGGSFIELD_API_KEY` + `HIGGSFIELD_API_SECRET` — video generation via the Higgsfield Cloud API (`platform.higgsfield.ai`, keys from cloud.higgsfield.ai; a separate product from the consumer higgsfield.ai app). Generation is two-stage: Soul text-to-image, then DoP image-to-video. Models overridable via `HF_IMAGE_MODEL` / `HF_VIDEO_MODEL`.
-- `YOUTUBE_CLIENT_ID` / `YOUTUBE_CLIENT_SECRET` / `YOUTUBE_REFRESH_TOKEN` — upload (token helper: `scripts/get_youtube_token.py`)
-- `ANTHROPIC_API_KEY` — the agent orchestration in CI
+- `HIGGSFIELD_API_KEY` + `HIGGSFIELD_API_SECRET` — keys from
+  **cloud.higgsfield.ai**, a separate product from the consumer higgsfield.ai
+  app. Generation is two-stage: Soul text-to-image, then DoP image-to-video.
+  Override models with `HF_IMAGE_MODEL` / `HF_VIDEO_MODEL`.
+  Calls shell out to curl: Cloudflare rejects Python HTTP clients by TLS
+  fingerprint (error 1010) regardless of User-Agent.
+- `YOUTUBE_CLIENT_ID` / `YOUTUBE_CLIENT_SECRET` / `YOUTUBE_REFRESH_TOKEN` —
+  regenerate the token with `scripts/get_youtube_token.py`. If the Google Cloud
+  OAuth consent screen sits in "Testing", refresh tokens expire after 7 days;
+  set it to "In production".
+- `ANTHROPIC_API_KEY` — step 2 only.
 
 ## Commands
 
 ```bash
 pip install -r scripts/requirements.txt
-python scripts/generate_and_upload.py generate --prompt-file <f> --out <mp4>   # stage 3
-python scripts/generate_and_upload.py upload --video <mp4> --metadata <json>   # stage 4
-python scripts/generate_and_upload.py   # legacy: full run off rotating config/prompts.json
+python scripts/pipeline.py preflight
+python scripts/pipeline.py generate --prompt-file <txt> --out <mp4>
+python scripts/pipeline.py upload --video <mp4> --metadata <json>
 ```
-
-The legacy mode (`config/prompts.json` rotation, `.github/workflows/daily_youtube.yml` manual dispatch) is the fallback if the agent pipeline is down.

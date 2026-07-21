@@ -5,6 +5,11 @@ on:
     - cron: '0 10 * * *'   # 10:00 UTC every day
   workflow_dispatch:
 
+# Never let two runs publish on the same day.
+concurrency:
+  group: daily-pipeline
+  cancel-in-progress: false
+
 jobs:
   daily-video:
     runs-on: ubuntu-latest
@@ -12,6 +17,13 @@ jobs:
     permissions:
       contents: write
       id-token: write
+
+    env:
+      HIGGSFIELD_API_KEY: ${{ secrets.HIGGSFIELD_API_KEY }}
+      HIGGSFIELD_API_SECRET: ${{ secrets.HIGGSFIELD_API_SECRET }}
+      YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+      YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+      YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
 
     steps:
       - name: Checkout repo
@@ -21,52 +33,99 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
 
       - name: Install dependencies
         run: pip install -r scripts/requirements.txt
 
-      - name: Run agent pipeline
+      # Costs nothing and runs first: a dead OAuth token used to surface only
+      # after a video had already been generated and paid for.
+      - name: Preflight credentials
+        run: python scripts/pipeline.py preflight
+
+      # The only LLM step. One invocation on Sonnet produces every creative
+      # artifact; the mechanical stages below are plain API calls.
+      - name: Write today's content
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: |
-            Run today's Smart Tech Daily pipeline exactly as specified in CLAUDE.md:
-            researcher -> scriptwriter -> producer -> publisher -> promoter,
-            using the matching agent for each stage. Stop and report if any
-            stage fails. When the run succeeds, commit pipeline/history.json
-            and the pipeline/today/ text artifacts (never the mp4) with message
-            "daily run: <topic>".
-          claude_args: '--allowedTools "Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Agent"'
-        env:
-          HIGGSFIELD_API_KEY: ${{ secrets.HIGGSFIELD_API_KEY }}
-          HIGGSFIELD_API_SECRET: ${{ secrets.HIGGSFIELD_API_SECRET }}
-          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
-          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
-          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+            Produce today's Smart Tech Daily content. Do not generate video,
+            upload anything, or commit — later workflow steps handle all of
+            that. Write these four files and nothing else:
 
-      # The action exits 0 whenever the agent finishes its turn — including when
-      # it correctly stopped because a stage failed. Without these two steps a
-      # no-op run is indistinguishable from a published video.
-      - name: Upload agent transcript
+              pipeline/today/research.md      (apply the researcher agent brief)
+              pipeline/today/video_prompt.txt (apply the scriptwriter agent brief)
+              pipeline/today/metadata.json    (apply the scriptwriter agent brief)
+              pipeline/today/promotion.md     (apply the promoter agent brief)
+
+            Read .claude/agents/{researcher,scriptwriter,promoter}.md for the
+            spec of each file and follow them exactly. Work in one pass, in that
+            order, yourself — do not dispatch subagents. Consult the skills in
+            .claude/skills/ that those briefs name.
+
+            In promotion.md, write the video URL as the literal placeholder
+            {{VIDEO_URL}}; the publish step substitutes the real URL.
+          claude_args: '--model claude-sonnet-5 --allowedTools "Read,Write,Glob,Grep,WebSearch,WebFetch"'
+
+      - name: Verify content artifacts
+        run: |
+          fail() { echo "::error::$1"; exit 1; }
+          for f in research.md video_prompt.txt metadata.json promotion.md; do
+            [ -s "pipeline/today/$f" ] || fail "content step produced no $f"
+          done
+          python - <<'PY'
+          import json, sys
+          meta = json.load(open("pipeline/today/metadata.json"))
+          for field in ("topic", "title", "description"):
+              if not meta.get(field):
+                  sys.exit(f"::error::metadata.json is missing '{field}'")
+          if len(meta["title"]) > 100:
+              sys.exit(f"::error::title is {len(meta['title'])} chars, limit is 100")
+          print(f"content OK — {meta['topic']}")
+          PY
+
+      - name: Generate video
+        run: |
+          python scripts/pipeline.py generate \
+            --prompt-file pipeline/today/video_prompt.txt \
+            --out pipeline/today/video.mp4
+
+      # Keep the paid artifact even if publishing fails, so a retry never has
+      # to buy the same video twice.
+      - name: Save video artifact
+        if: always() && hashFiles('pipeline/today/video.mp4') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: video
+          path: pipeline/today/video.mp4
+          retention-days: 7
+
+      - name: Publish to YouTube
+        run: |
+          python scripts/pipeline.py upload \
+            --video pipeline/today/video.mp4 \
+            --metadata pipeline/today/metadata.json
+
+      - name: Commit run artifacts
+        run: |
+          URL=$(python -c "import json; print(json.load(open('pipeline/history.json'))[-1]['url'])")
+          TOPIC=$(python -c "import json; print(json.load(open('pipeline/history.json'))[-1]['topic'])")
+          python - "$URL" <<'PY'
+          import sys, pathlib
+          p = pathlib.Path("pipeline/today/promotion.md")
+          p.write_text(p.read_text().replace("{{VIDEO_URL}}", sys.argv[1]))
+          PY
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pipeline/history.json pipeline/today/*.md pipeline/today/*.txt pipeline/today/*.json
+          git commit -m "daily run: ${TOPIC}"
+          git push
+
+      - name: Save agent transcript
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: agent-transcript
           path: /home/runner/work/_temp/claude-execution-output.json
           if-no-files-found: warn
-
-      - name: Verify the pipeline actually published
-        if: always()
-        run: |
-          fail() { echo "::error::$1"; exit 1; }
-          [ -f pipeline/today/research.md ]   || fail "stage 1 (researcher) produced no research.md"
-          [ -f pipeline/today/metadata.json ] || fail "stage 2 (scriptwriter) produced no metadata.json"
-          [ -f pipeline/history.json ]        || fail "stage 4 (publisher) never recorded an upload"
-          python - <<'PY'
-          import json, sys, datetime
-          today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
-          history = json.load(open("pipeline/history.json"))
-          if not history or history[-1].get("date") != today:
-              sys.exit(f"::error::history.json has no entry for {today} — nothing was published")
-          print(f"published: {history[-1].get('url')} ({history[-1].get('topic')})")
-          PY
