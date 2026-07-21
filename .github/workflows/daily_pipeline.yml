@@ -43,3 +43,30 @@ jobs:
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+
+      # The action exits 0 whenever the agent finishes its turn — including when
+      # it correctly stopped because a stage failed. Without these two steps a
+      # no-op run is indistinguishable from a published video.
+      - name: Upload agent transcript
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-transcript
+          path: /home/runner/work/_temp/claude-execution-output.json
+          if-no-files-found: warn
+
+      - name: Verify the pipeline actually published
+        if: always()
+        run: |
+          fail() { echo "::error::$1"; exit 1; }
+          [ -f pipeline/today/research.md ]   || fail "stage 1 (researcher) produced no research.md"
+          [ -f pipeline/today/metadata.json ] || fail "stage 2 (scriptwriter) produced no metadata.json"
+          [ -f pipeline/history.json ]        || fail "stage 4 (publisher) never recorded an upload"
+          python - <<'PY'
+          import json, sys, datetime
+          today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+          history = json.load(open("pipeline/history.json"))
+          if not history or history[-1].get("date") != today:
+              sys.exit(f"::error::history.json has no entry for {today} — nothing was published")
+          print(f"published: {history[-1].get('url')} ({history[-1].get('topic')})")
+          PY
