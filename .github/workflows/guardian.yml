@@ -1,0 +1,81 @@
+name: Guardian Risk Report
+
+# GitHub cron is UTC and has no DST. Each report gets one slot for EDT and one
+# for EST; guardian.py checks NY time and the NYSE calendar and skips the slot
+# that does not apply (and holidays). Minutes are off :00/:30 because GitHub
+# delays runs scheduled on the hour.
+on:
+  schedule:
+    - cron: '25 12 * * 1-5'   # 08:25 EDT  pre-market (target 08:30 NY)
+    - cron: '25 13 * * 1-5'   # 08:25 EST  pre-market
+    - cron: '20 17 * * 1-5'   # 13:20 EDT  early-close days only
+    - cron: '20 18 * * 1-5'   # 13:20 EST  early-close days only
+    - cron: '20 20 * * 1-5'   # 16:20 EDT  end-of-day stop review
+    - cron: '20 21 * * 1-5'   # 16:20 EST  end-of-day stop review
+  workflow_dispatch:
+    inputs:
+      session:
+        description: premarket, close, or auto
+        default: auto
+        type: choice
+        options: [auto, premarket, close]
+      force:
+        description: Ignore the time window and the already-sent check
+        type: boolean
+        default: false
+
+concurrency:
+  group: guardian
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: guardian
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      IBKR_FLEX_TOKEN: ${{ secrets.IBKR_FLEX_TOKEN }}
+      IBKR_FLEX_QUERY_ID: ${{ secrets.IBKR_FLEX_QUERY_ID }}
+      TRADIER_TOKEN: ${{ secrets.TRADIER_TOKEN }}
+      TRADIER_SANDBOX: ${{ vars.TRADIER_SANDBOX }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: guardian/requirements.txt
+
+      - run: pip install -r requirements.txt
+
+      # Ratchet (never-lower stops) and sent markers survive between runs in
+      # the Actions cache, not in git: the repository is public.
+      - name: Restore state
+        uses: actions/cache/restore@v4
+        with:
+          path: guardian/state
+          key: guardian-state-${{ github.run_id }}
+          restore-keys: guardian-state-
+
+      - name: Run Guardian
+        id: run
+        run: |
+          args="--session ${{ inputs.session || 'auto' }}"
+          if [ "${{ inputs.force }}" = "true" ]; then args="$args --force"; fi
+          python guardian.py $args
+
+      - name: Save state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: guardian/state
+          key: guardian-state-${{ github.run_id }}

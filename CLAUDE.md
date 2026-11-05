@@ -61,3 +61,12 @@ python scripts/pipeline.py preflight
 python scripts/pipeline.py generate --prompt-file <txt> --out <mp4>
 python scripts/pipeline.py upload --video <mp4> --metadata <json>
 ```
+
+## Guardian (separate project in `guardian/`)
+
+Pre-market risk report for an IBKR account, delivered to Telegram by
+`.github/workflows/guardian.yml`. Unrelated to the video pipeline. Advice only:
+no code path places orders. Hard-rule numbers (stops, ratchet, open risk,
+status floor) come from `guardian/guardian_core/analysis.py`, not the model.
+This repo is public, so report content and state never go into git or logs.
+See `guardian/README.md`; tests: `cd guardian && python -m pytest tests -q`.

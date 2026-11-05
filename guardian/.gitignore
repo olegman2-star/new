@@ -1,0 +1,7 @@
+# Account data never goes into git: this repository is public.
+reports/*
+!reports/.gitkeep
+state/*
+!state/.gitkeep
+__pycache__/
+.pytest_cache/

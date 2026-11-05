@@ -1,0 +1,144 @@
+# Guardian configuration. Secrets never go here: they are environment variables
+# (see README.md). Everything in this file is safe to commit.
+
+timezone: America/New_York
+exchange_calendar: XNYS
+
+schedule:
+  # Pre-market report: 60 minutes before the open, computed from New York time.
+  premarket_minutes_before_open: 60
+  # GitHub cron can start late. Accept a run that starts this many minutes
+  # before the target time, up to this many minutes after it.
+  premarket_early_tolerance_min: 15
+  premarket_late_tolerance_min: 50
+  # End-of-day stop review: minutes after the close (early closes respected).
+  close_minutes_after: 15
+  close_early_tolerance_min: 10
+  close_late_tolerance_min: 90
+
+risk:
+  lottery_threshold_usd: 500        # positions worth less are lottery tickets
+  max_open_risk_pct: 8.0            # above this, status is automatically RED
+  stop_vol_multiple: 1.5            # stop no closer than 1.5x daily volatility
+  stop_buffer_pct: 0.3              # "just below" a level: this % under it
+  earnings_warning_trading_days: 10
+  big_move_pct: 4.0                 # holdings moving more than this get a headline search
+  vol_window_days: 30
+
+asia:
+  kospi_warning_pct: -2.0
+  hynix_warning_pct: -4.0
+  tickers:
+    KOSPI: "^KS11"
+    KOSDAQ: "^KQ11"
+    Samsung: "005930.KS"
+    SK Hynix: "000660.KS"
+    Nikkei: "^N225"
+
+us_indices: [SPY, QQQ, IWM]
+vix_ticker: "^VIX"
+
+sector_filter:
+  fail_below_13w_low: true
+  fail_month_drop_pct: -10.0
+
+# Sector / industry ETF for each holding. A new holding without an entry is
+# checked against default_sector_etf and the report says the mapping is missing.
+sector_etfs:
+  SMH: Semiconductors
+  XLK: Technology
+  XLI: Industrials
+  XLC: Communication
+holding_sector:
+  ADBE: XLK
+  AVGO: SMH
+  GOOG: XLC
+  IREN: SMH
+  NVDA: SMH
+  PWR: XLI
+  SNDK: SMH
+default_sector_etf: SPY
+
+# Always treated as lottery tickets, whatever their value.
+lottery_tickets: [INO, VCX, ZOMDF]
+
+# Stops that are actually resting at IBKR. The Flex Web Service does not report
+# open orders, so in headless runs this list IS the stop book: update it every
+# time you place, raise or cancel a stop. The report labels it as manual data.
+# Live IBKR open orders replace this list when the run has access to them.
+manual_stops:
+  updated: 2026-11-05
+  orders:
+    - {symbol: PWR, shares: 10, stop: 527.50, tif: GTC}
+
+# Last proposed stops. Seeds the never-lower ratchet: Guardian will not suggest
+# a stop below these. state/stops.json takes over after the first live run.
+proposed_stops:
+  SNDK: 945.00
+  AVGO: 305.00
+  NVDA: 187.50
+  PWR: 524.00
+  IREN: 19.40
+  GOOG: 269.50
+  ADBE: 237.00
+
+# Used only with --baseline (offline testing, or when IBKR is unreachable).
+# Never treated as live: the report says so.
+baseline_holdings:
+  ADBE: 20
+  AVGO: 38
+  GOOG: 20
+  IREN: 200
+  NVDA: 50
+  PWR: 26
+  SNDK: 17
+  # Lottery tickets (INO, VCX, ZOMDF) are listed from lottery_tickets above.
+
+hedges:
+  # Specific structures Oleg is considering. Priced every run.
+  candidates:
+    - name: IREN collar
+      underlying: IREN
+      kind: collar
+      expiry: 2026-12-18
+      contracts: 2
+      legs:
+        - {side: buy, right: P, strike: 20}
+        - {side: sell, right: C, strike: 25}
+    - name: SMH put spread
+      underlying: SMH
+      kind: put_spread
+      expiry: 2026-12-18
+      contracts: 1
+      legs:
+        - {side: buy, right: P, strike: 475}
+        - {side: sell, right: P, strike: 420}
+  # Auto-sized sector put spread for clusters of small positions.
+  auto_sector_spread:
+    enabled: true
+    long_otm_pct: 5
+    short_otm_pct: 15
+    min_dte: 30
+    max_dte: 75
+    min_cluster_usd: 5000
+  roll_if_dte_below: 14
+  stale_spread_pct: 25              # bid/ask spread wider than this % of mid is flagged
+
+macro:
+  # Known scheduled events. The model also runs a web search for the week's
+  # calendar; this list is the floor, not the whole picture. Verify yearly.
+  events:
+    - {date: 2026-12-09, event: "FOMC decision (Dec 8-9 meeting)"}
+
+llm:
+  model: claude-opus-5-5
+  effort: high
+  max_tokens: 16000
+  web_search_max_uses: 5
+
+report:
+  dir: reports
+  max_lines: 60
+  closing_lines:
+    - "The market can always go lower. Are all your shares covered by stops?"
+    - "Not financial advice. Oleg makes every decision."
