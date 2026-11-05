@@ -35,13 +35,13 @@ def test_avoid_round_moves_down_off_round_numbers():
 
 
 def test_stop_respects_vol_floor_and_picks_level():
-    lv = {"daily_vol_pct": 2.0, "low_13w": 98.0, "low_26w": 90.0, "low_52w": 80.0}
+    lv = {"daily_vol_pct": 2.0, "low_13w": 98.0, "low_26w": 95.5, "low_52w": 80.0}
     # 13w low at 98 is within 1.5x vol (97 floor) of 100, so skip to 26w.
     s = analysis.compute_stop(100.0, lv, 1.5, 0.3)
     assert s["stop"] < 97 and "26w" in s["basis"]
-    lv["low_13w"] = 95.0
+    lv["low_13w"] = 96.0
     s = analysis.compute_stop(100.0, lv, 1.5, 0.3)
-    assert "13w" in s["basis"] and s["stop"] < 95
+    assert "13w" in s["basis"] and s["stop"] < 96
 
 
 def test_stop_below_all_levels_uses_vol():
@@ -52,7 +52,7 @@ def test_stop_below_all_levels_uses_vol():
 
 def _audit(last, stop_book, ratchet, nav=100_000, shares=50):
     pos = [{"symbol": "NVDA", "shares": shares, "avg_cost": 150.0, "last": last}]
-    lv = {"NVDA": {"daily_vol_pct": 2.0, "low_13w": last * 0.9, "low_26w": last * 0.8, "low_52w": last * 0.7}}
+    lv = {"NVDA": {"daily_vol_pct": 2.0, "low_13w": last * 0.95, "low_26w": last * 0.8, "low_52w": last * 0.7}}
     return analysis.stop_audit(pos, lv, stop_book, ratchet, CFG, nav)
 
 
@@ -79,7 +79,7 @@ def test_uncovered_is_critical_and_counted():
 def test_breach_and_red_when_over_limit():
     a = _audit(180.0, [], {"NVDA": 185.0})
     assert a["rows"][0]["breached"]
-    a = _audit(200.0, [], {}, nav=10_000)
+    a = _audit(200.0, [], {}, nav=5_000)
     assert a["risk_over_limit"]
     status, why = analysis.status_floor(a, {}, False, [], False)
     assert status == "RED" and "exceeds" in why[0]
