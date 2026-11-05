@@ -209,3 +209,10 @@ def test_parse_flex():
     assert len(d["stocks"]) == 1 and d["stocks"][0]["avg_cost"] == 150.2
     assert d["options"][0]["expiry"] == "2026-12-18" and d["options"][0]["right"] == "P"
     assert d["orders"] is None
+
+
+def test_far_level_falls_back_to_vol_floor():
+    # SNDK on Nov 5 2026: 26w low too close, next level (52w) 80% away.
+    lv = {"daily_vol_pct": 4.81, "low_13w": 1014.0, "low_26w": 998.19, "low_52w": 183.0}
+    s = analysis.compute_stop(1000.50, lv, 1.5, 0.3)
+    assert 925 < s["stop"] < 929 and "vol" in s["basis"]

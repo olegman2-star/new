@@ -33,8 +33,13 @@ def compute_stop(last: float, lv: dict, vol_multiple: float, buffer_pct: float) 
         L = lv.get(name)
         if L is not None and L < last:
             cands.append((L, name))
+    # A level only counts if it sits between 1.5x and 3x daily vol below the
+    # price; a level further away (e.g. a 52w low 80% down) is not "nearest".
+    too_far = last * (1 - 2 * vol_multiple * vol / 100)
     for L, name in sorted(cands, reverse=True):  # nearest level first
         s = L * (1 - buffer_pct / 100)
+        if s < too_far:
+            break
         if s <= floor:
             return {"stop": avoid_round(s), "basis": f"below {name.replace('_', ' ')} {L:.2f}"}
     return {"stop": avoid_round(floor),
